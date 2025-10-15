@@ -12,7 +12,7 @@ try:
 except Exception:
     pass
 
-def get_deepseek_llm(temperature=0.1):
+def get_llm(temperature=0.1):
     """Initialize DeepSeek LLM with OpenAI-compatible API"""
     return ChatOpenAI(
         model="deepseek-chat",

@@ -121,3 +121,64 @@ class DataService:
         except Exception as e:
             print(f"Error in get_cashflow_forecast: {e}")
             return {"error": str(e)}
+        
+    def get_organizations(self):
+        """Get all organizations"""
+        return self.db.table('organizations').select("*").execute().data
+    
+    def get_spending_by_org(self, org_id, days=30):
+        """Get spending summary for an organization"""
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        
+        result = self.db.table('transactions')\
+            .select("*")\
+            .eq('organization_id', org_id)\
+            .gte('date', start_date.date().isoformat())\
+            .execute()
+        
+        if not result.data:
+            return None
+        
+        df = pd.DataFrame(result.data)
+        
+        return {
+            'total_spent': float(df['amount'].sum()),
+            'transaction_count': len(df),
+            'avg_transaction': float(df['amount'].mean()),
+            'by_category': df.groupby('category')['amount'].sum().to_dict(),
+            'by_status': df.groupby('status').value_counts().to_dict(),
+            'top_merchants': df.groupby('merchant')['amount'].sum().nlargest(5).to_dict(),
+            'fraud_flagged': len(df[df['fraud_flag'] == 1])
+        }
+    
+    def get_budget_status(self, org_id):
+        """Get budget vs actual for organization"""
+        result = self.db.table('budgets')\
+            .select("*")\
+            .eq('organization_id', org_id)\
+            .execute()
+        
+        budgets = []
+        for budget in result.data:
+            if budget['approved_amount'] > 0:
+                variance = ((budget['actual_spent'] - budget['approved_amount']) 
+                           / budget['approved_amount'] * 100)
+                budgets.append({
+                    'department': budget['dept'],
+                    'approved': budget['approved_amount'],
+                    'spent': budget['actual_spent'],
+                    'variance_percent': variance,
+                    'status': 'over' if variance > 0 else 'under'
+                })
+        
+        return budgets
+    
+    def get_alerts(self, org_id):
+        """Get unread alerts"""
+        return self.db.table('alerts')\
+            .select("*")\
+            .eq('organization_id', org_id)\
+            .eq('is_read', False)\
+            .order('created_at', desc=True)\
+            .execute().data

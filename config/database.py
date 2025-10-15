@@ -5,35 +5,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-class Database:
+class DatabaseConnection:
     _instance = None
     
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance.client = create_client(
-                os.getenv("SUPABASE_URL"),
-                os.getenv("SUPABASE_KEY")
-            )
+            url = "https://wfoigedwujyibqvdtnjk.supabase.co"
+            key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indmb2lnZWR3dWp5aWJxdmR0bmprIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkyMzM1MjAsImV4cCI6MjA3NDgwOTUyMH0.RJSJTq7e51hekJ32QwnTjQZRT8eiEZTMHrZh-5QBIf8"
+            cls._instance.client = create_client(url, key)
         return cls._instance
     
     def get_client(self):
         return self.client
 
+# Helper function
 def get_db():
-    """Get database client"""
-    return Database().get_client()
-
-def test_connection():
-    """Test database connection"""
-    try:
-        db = get_db()
-        result = db.table('organizations').select("count").execute()
-        print(f"✅ Database connected")
-        return True
-    except Exception as e:
-        print(f"❌ Database connection failed: {e}")
-        return False
-
-if __name__ == "__main__":
-    test_connection()
+    return DatabaseConnection().get_client()
