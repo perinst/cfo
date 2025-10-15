@@ -41,7 +41,7 @@ tab_labels = [
     "📊 Dashboard",
     "📈 Analytics",
     "� Transactions",
-    "�💰 Budget Management",
+    "💰 Budget Management",
 ]
 tabs = st.tabs(tab_labels)
 tab1, tab2, tab3, tab_tx, tab4 = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4]
@@ -142,6 +142,71 @@ with tab2:
             )
             st.plotly_chart(fig, use_container_width=True)
 
+    cf = st.session_state.data_service.get_cashflow_forecast(months=3)
+    if cf and not cf.get("error"):
+        st.markdown("### Current Cashflow")
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric(
+                "Monthly Burn Rate",
+                f"${cf.get('monthly_burn_rate', 0):,.0f}",
+            )
+        with m2:
+            st.metric(
+                "Pending Receivables",
+                f"${cf.get('pending_receivables', 0):,.0f}",
+            )
+        with m3:
+            st.metric(
+                f"Projected {cf.get('months', 3)}-Month Spend",
+                f"${cf.get('projected_spend', 0):,.0f}",
+            )
+        with m4:
+            net = float(cf.get("net_position", 0) or 0)
+            st.metric(
+                "Net Position",
+                f"${net:,.0f}",
+            )
+
+        # Visualize components
+        try:
+            chart_df = pd.DataFrame(
+                {
+                    "Metric": [
+                        "Projected Spend",
+                        "Pending Receivables",
+                        "Net Position",
+                    ],
+                    "Amount": [
+                        cf.get("projected_spend", 0),
+                        cf.get("pending_receivables", 0),
+                        net,
+                    ],
+                }
+            )
+            fig = px.bar(
+                chart_df,
+                x="Metric",
+                y="Amount",
+                title="Cashflow Components (Next 3 Months)",
+                color="Metric",
+                text="Amount",
+            )
+            fig.update_traces(texttemplate="$%{text:,.0f}", textposition="outside")
+            fig.update_layout(yaxis_title="USD")
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception:
+            pass
+
+        # Quick health note
+        if net < 0:
+            st.warning(
+                "Projected net negative cash position over the next 3 months. Consider reducing spend or accelerating receivables."
+            )
+        else:
+            st.success(
+                "Projected to remain cash-positive over the next 3 months based on current trajectory."
+            )
     # Budget Status Table with filter dropdowns
     options = st.session_state.data_service.get_budget_filter_options(
         current_user=current_user
@@ -257,6 +322,7 @@ with tab3:
                     "Forecast cashflow for next 3 months",
                     current_user.get("organization_id"),
                 )
+
             else:
                 response = st.session_state.agent.analyze_spending(
                     "Find cost optimization opportunities",
