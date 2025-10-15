@@ -81,6 +81,10 @@ class CFOAgent(BaseAgent):
 
     def forecast_cashflow(self, query: str, org_id: str) -> str:
         """Cashflow forecasting"""
+        org_id = org_id or self.org_id
+        if not org_id:
+            return "Please select an organization to forecast cashflow."
+
         forecast = self.data_service.get_cashflow_forecast(org_id)
 
         prompt = PromptTemplate(

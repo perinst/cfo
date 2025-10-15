@@ -245,19 +245,22 @@ with tab3:
         with st.spinner("Generating insights..."):
             if analysis_type == "Spending Trends":
                 response = st.session_state.agent.analyze_spending(
-                    "Analyze spending trends and patterns"
+                    "Analyze spending trends and patterns",
+                    current_user.get("organization_id"),
                 )
             elif analysis_type == "Budget Analysis":
                 response = st.session_state.agent.analyze_budget(
-                    "Analyze budget performance"
+                    "Analyze budget performance", current_user.get("organization_id")
                 )
             elif analysis_type == "Cashflow Forecast":
                 response = st.session_state.agent.forecast_cashflow(
-                    "Forecast cashflow for next 3 months"
+                    "Forecast cashflow for next 3 months",
+                    current_user.get("organization_id"),
                 )
             else:
                 response = st.session_state.agent.analyze_spending(
-                    "Find cost optimization opportunities"
+                    "Find cost optimization opportunities",
+                    current_user.get("organization_id"),
                 )
 
             st.markdown(response)
