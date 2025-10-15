@@ -101,7 +101,7 @@ with tab2:
     summary = st.session_state.data_service.get_spending_summary(30)
     budgets = st.session_state.data_service.get_budget_analysis()
     invoices = st.session_state.data_service.get_overdue_invoices()
-    # budget_usage = st.session_state.data_service.calculate_budget_usage()
+    budget_usage = st.session_state.data_service.calculate_budget_usage()
 
     with col1:
         st.metric(

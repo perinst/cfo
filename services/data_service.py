@@ -377,30 +377,6 @@ class DataService:
             print(f"Error in get_cashflow_forecast: {e}")
             return {"error": str(e)}
 
-    def get_overdue_invoices(self, selected_org) -> Dict:
-        """Get overdue invoices summary"""
-        try:
-            result = (
-                self.db.table("invoices").select("*").eq("is_overdue", True).execute()
-            )
-
-            if not result.data:
-                return {"count": 0, "total_amount": 0, "invoices": []}
-
-            df = pd.DataFrame(result.data)
-
-            return {
-                "count": len(df),
-                "total_amount": float(df["amount"].sum()),
-                "by_vendor": df.groupby("vendor")["amount"].sum().to_dict(),
-                "oldest_days": (
-                    datetime.now() - pd.to_datetime(df["due_date"]).min()
-                ).days,
-            }
-        except Exception as e:
-            print(f"Error in get_overdue_invoices: {e}")
-            return {"error": str(e)}
-
     def get_budget_filter_options(
         self, current_user: Optional[Dict] = None
     ) -> Dict[str, List]:
