@@ -222,7 +222,7 @@ class DataService:
         try:
             if decision not in ("approve", "reject"):
                 return {"success": False, "error": "Invalid decision"}
-            # Load transaction
+
             cur = (
                 self.db.table("transactions")
                 .select("*")
@@ -230,6 +230,7 @@ class DataService:
                 .limit(1)
                 .execute()
             )
+
             if not cur.data:
                 return {"success": False, "error": "Not found"}
             tx = cur.data[0]
@@ -246,19 +247,23 @@ class DataService:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def get_spending_summary(self, days: int = 30) -> Dict:
+    def get_spending_summary(
+        self,
+        org_id: int = None,
+        days: int = 30,
+    ) -> Dict:
         """Get spending summary for last N days"""
         try:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days)
 
-            result = (
-                self.db.table("transactions")
-                .select("*")
-                .gte("date", start_date.date().isoformat())
-                .lte("date", end_date.date().isoformat())
-                .execute()
+            q = self.db.table("transactions").select("*")
+            if org_id is not None:
+                q = q.eq("organization_id", org_id)
+            q = q.gte("date", start_date.date().isoformat()).lte(
+                "date", end_date.date().isoformat()
             )
+            result = q.execute()
 
             if not result.data:
                 return {
@@ -286,10 +291,15 @@ class DataService:
             print(f"Error in get_spending_summary: {e}")
             return {"error": str(e)}
 
-    def get_budget_analysis(self) -> List[Dict]:
-        """Analyze budget variance"""
+    def get_budget_analysis(self, org_id: int) -> List[Dict]:
+        """Analyze budget varia,nce"""
         try:
-            result = self.db.table("budgets").select("*").execute()
+            result = (
+                self.db.table("budgets")
+                .select("*")
+                .eq("organization_id", org_id)
+                .execute()
+            )
             budgets = []
             for budget in result.data:
                 approved_raw = budget.get("approved_amount")
@@ -326,12 +336,13 @@ class DataService:
             print(f"Error in get_budget_analysis: {e}")
             return []
 
-    def get_overdue_invoices(self) -> Dict:
-        """Get overdue invoices summary"""
+    def get_overdue_invoices(self, org_id: Optional[int] = None) -> Dict:
+        """Get overdue invoices summary. Optionally scope by organization_id."""
         try:
-            result = (
-                self.db.table("invoices").select("*").eq("is_overdue", True).execute()
-            )
+            q = self.db.table("invoices").select("*").eq("is_overdue", True)
+            if org_id is not None:
+                q = q.eq("organization_id", org_id)
+            result = q.execute()
 
             if not result.data:
                 return {"count": 0, "total_amount": 0, "invoices": []}
@@ -350,16 +361,21 @@ class DataService:
             print(f"Error in get_overdue_invoices: {e}")
             return {"error": str(e)}
 
-    def get_cashflow_forecast(self, months: int = 3) -> Dict:
+    def get_cashflow_forecast(self, org_id: int, months: int = 3) -> Dict:
         """Simple cashflow forecast"""
         try:
             # Get historical spending
-            spending_90d = self.get_spending_summary(90)
-            monthly_burn = spending_90d["total_spent"] / 3
+            # pass org_id into spending summary so historical spend is scoped to org
+            spending_90d = self.get_spending_summary(org_id=org_id, days=90)
+            monthly_burn = float(spending_90d.get("total_spent", 0)) / 3
 
             # Get pending invoices (receivables)
             invoices = (
-                self.db.table("invoices").select("*").eq("status", "pending").execute()
+                self.db.table("invoices")
+                .select("*")
+                .eq("organization_id", org_id)
+                .eq("status", "pending")
+                .execute()
             )
 
             pending_receivables = sum(
@@ -674,10 +690,14 @@ class DataService:
         project_id: Optional[str] = None,
         quarter: Optional[str] = None,
         year: Optional[int] = None,
+        org_id: Optional[int] = None,
     ) -> Dict:
         """Calculate total budget usage with optional filters."""
         try:
             query = self.db.table("budgets").select("*")
+
+            if org_id is not None:
+                query = query.eq("organization_id", org_id)
 
             if department:
                 query = query.eq("dept", department)
