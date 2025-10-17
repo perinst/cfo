@@ -836,24 +836,25 @@ class DataService:
                 current_user and (is_manager(current_user) or is_admin(current_user))
             ):
                 return []
-            assigned = (
-                self.ac.get_assigned_projects(
-                    current_user["id"], current_user["organization_id"]
-                )
-                if is_manager(current_user)
-                else None
-            )
+            # assigned = (
+            #     self.ac.get_assigned_projects(
+            #         current_user["id"], current_user["organization_id"]
+            #     )
+            #     if is_manager(current_user)
+            #     else None
+            # )
             q = (
                 self.db.table("spending_proposals")
                 .select("*")
                 .neq("status", "pending")
                 .eq("organization_id", current_user["organization_id"])
+                .eq("approved_by", current_user["id"])
                 .order("updated_at", desc=True)
             )
             res = q.execute()
             rows = res.data or []
-            if is_manager(current_user):
-                rows = [r for r in rows if r.get("project_id") in assigned]
+            # if is_manager(current_user):
+            #     rows = [r for r in rows if r.get("project_id") in assigned]
             return rows
         except Exception as e:
             print(f"Error in get_proposals_history_for_manager: {e}")
@@ -898,7 +899,7 @@ class DataService:
                     "status": new_status,
                     "comments": comments or (f"{new_status.title()} by manager"),
                     "organization_id": current_user["organization_id"],
-                    "approved_at": datetime.now().isoformat(),
+                    "approved_at": datetime.utcnow().isoformat(),
                 }
             ).execute()
             return {"success": True, "data": upd.data[0] if upd.data else None}

@@ -820,8 +820,74 @@ if tab4 is not None:
                                 or []
                             )
                             for step in steps:
-                                st.write(
-                                    f"- {step.get('approval_level','manager')} • {step.get('status')} • {step.get('comments') or ''} • {step.get('approved_at') or step.get('created_at')}"
+                                # Determine icon and color based on status
+                                status = step.get("status", "").lower()
+                                if status == "approved":
+                                    status_icon = "✅"
+                                    status_color = "green"
+                                elif status == "rejected":
+                                    status_icon = "❌"
+                                    status_color = "red"
+                                elif status == "pending":
+                                    status_icon = "⏳"
+                                    status_color = "orange"
+                                else:
+                                    status_icon = "ℹ️"
+                                    status_color = "gray"
+
+                                # Format timestamp
+                                timestamp = step.get("approved_at") or step.get(
+                                    "created_at", ""
+                                )
+                                # if timestamp:
+                                #     try:
+                                #         dt = datetime.fromisoformat(
+                                #             timestamp.replace("Z", "+00:00")
+                                #         )
+                                #         formatted_time = dt.strftime(
+                                #             "%b %d, %Y %I:%M %p"
+                                #         )
+                                #     except:
+                                #         formatted_time = timestamp
+                                # else:
+                                #     formatted_time = "N/A"
+
+                                # Display approval step with improved formatting
+                                approval_level = step.get(
+                                    "approval_level", "manager"
+                                ).upper()
+                                comments = step.get("comments") or "No comments"
+
+                                st.markdown(
+                                    f"""
+                                <div style="
+                                    background-color: rgba(255,255,255,0.05);
+                                    border-left: 4px solid {status_color};
+                                    padding: 12px;
+                                    margin: 8px 0;
+                                    border-radius: 4px;
+                                ">
+                                    <div style="display: flex; align-items: center; margin-bottom: 4px;">
+                                        <span style="font-size: 1.2em; margin-right: 8px;">{status_icon}</span>
+                                        <strong>{approval_level}</strong>
+                                        <span style="
+                                            background-color: {status_color};
+                                            color: white;
+                                            padding: 2px 8px;
+                                            border-radius: 12px;
+                                            margin-left: 8px;
+                                            font-size: 0.85em;
+                                        ">{status.upper()}</span>
+                                    </div>
+                                    <div style="color: #888; font-size: 0.9em; margin-top: 4px;">
+                                        💬 {comments}
+                                    </div>
+                                    <div style="color: #666; font-size: 0.85em; margin-top: 4px;">
+                                        🕐 {timestamp}
+                                    </div>
+                                </div>
+                                """,
+                                    unsafe_allow_html=True,
                                 )
 
 
