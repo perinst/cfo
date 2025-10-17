@@ -839,18 +839,18 @@ if tab4 is not None:
                                 timestamp = step.get("approved_at") or step.get(
                                     "created_at", ""
                                 )
-                                # if timestamp:
-                                #     try:
-                                #         dt = datetime.fromisoformat(
-                                #             timestamp.replace("Z", "+00:00")
-                                #         )
-                                #         formatted_time = dt.strftime(
-                                #             "%b %d, %Y %I:%M %p"
-                                #         )
-                                #     except:
-                                #         formatted_time = timestamp
-                                # else:
-                                #     formatted_time = "N/A"
+                                if timestamp:
+                                    try:
+                                        dt = datetime.fromisoformat(
+                                            timestamp.replace("Z", "+00:00")
+                                        )
+                                        formatted_time = dt.strftime(
+                                            "%b %d, %Y %I:%M %p"
+                                        )
+                                    except:
+                                        formatted_time = timestamp
+                                else:
+                                    formatted_time = "N/A"
 
                                 # Display approval step with improved formatting
                                 approval_level = step.get(
@@ -883,7 +883,7 @@ if tab4 is not None:
                                         💬 {comments}
                                     </div>
                                     <div style="color: #666; font-size: 0.85em; margin-top: 4px;">
-                                        🕐 {timestamp}
+                                        🕐 {formatted_time}
                                     </div>
                                 </div>
                                 """,
