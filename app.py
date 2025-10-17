@@ -7,18 +7,17 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import pandas as pd
 from auth.roles import is_admin, is_manager, is_employee
+from auth.session_manager import SessionManager
 
 
-if "auth_user" not in st.session_state or not st.session_state["auth_user"]:
+current_user = SessionManager.get_current_user()
+
+if not current_user:
     st.info("Please sign in to continue.")
-    # Use direct navigation to avoid KeyError in st.page_link on some Streamlit versions
     try:
         st.switch_page("pages/Login.py")
     except Exception:
-        # Fallback: stop execution and let user select Login from sidebar/pages
         st.stop()
-
-current_user = st.session_state["auth_user"]
 
 # Page config
 st.set_page_config(page_title="AI CFO Assistant", page_icon="💼", layout="wide")
@@ -103,8 +102,8 @@ with tab2:
     # Get data
     summary = st.session_state.data_service.get_spending_summary(org_id, 30)
     budgets = st.session_state.data_service.get_budget_analysis(org_id)
-    invoices = st.session_state.data_service.get_overdue_invoices()
-    budget_usage = st.session_state.data_service.calculate_budget_usage()
+    invoices = st.session_state.data_service.get_overdue_invoices(org_id)
+    budget_usage = st.session_state.data_service.calculate_budget_usage(org_id=org_id)
 
     with col1:
         st.metric(
@@ -308,7 +307,7 @@ with tab3:
             "Cost Optimization",
         ],
     )
-    org_id = (current_user.get("organization_id"),)
+    org_id = current_user.get("organization_id")
     if st.button("Generate Analysis"):
         with st.spinner("Generating insights..."):
             if analysis_type == "Spending Trends":
@@ -826,7 +825,7 @@ with st.sidebar:
     st.write(f"Org: {current_user.get('organization_id') or 'N/A'}")
 
     if st.button("Sign out"):
-        st.session_state.pop("auth_user", None)
+        SessionManager.clear_user()
         st.rerun()
 
     st.info(
