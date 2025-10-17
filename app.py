@@ -51,6 +51,7 @@ with tab1:
     col1, col2 = st.columns([2, 1])
 
     with col1:
+        org_id = current_user["organization_id"]
         # Chat history
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
@@ -66,7 +67,7 @@ with tab1:
             # Get AI response
             with st.chat_message("assistant"):
                 with st.spinner("Analyzing..."):
-                    response = st.session_state.agent.chat(prompt)
+                    response = st.session_state.agent.chat(prompt, org_id)
                     st.markdown(response)
 
             st.session_state.messages.append({"role": "assistant", "content": response})
@@ -92,14 +93,16 @@ with tab2:
     st.subheader("Financial Dashboard")
 
     # Budget Alerts Section
-    all_budgets = st.session_state.data_service.get_all_budgets()
+    all_budgets = st.session_state.data_service.get_all_budgets(current_user)
 
     # Metrics
     col1, col2, col3, col4 = st.columns(4)
 
+    org_id = current_user["organization_id"]
+
     # Get data
-    summary = st.session_state.data_service.get_spending_summary(30)
-    budgets = st.session_state.data_service.get_budget_analysis()
+    summary = st.session_state.data_service.get_spending_summary(org_id, 30)
+    budgets = st.session_state.data_service.get_budget_analysis(org_id)
     invoices = st.session_state.data_service.get_overdue_invoices()
     budget_usage = st.session_state.data_service.calculate_budget_usage()
 
@@ -142,7 +145,7 @@ with tab2:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-    cf = st.session_state.data_service.get_cashflow_forecast(months=3)
+    cf = st.session_state.data_service.get_cashflow_forecast(org_id, months=3)
     if cf and not cf.get("error"):
         st.markdown("### Current Cashflow")
         m1, m2, m3, m4 = st.columns(4)

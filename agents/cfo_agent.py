@@ -1,5 +1,6 @@
 # agents/cfo_agent.py - FIXED VERSION
 from agents.base_agent import BaseAgent
+from agents.router_agent import RouterAgent
 from config.llm_config import get_llm
 from services.data_service import DataService
 from langchain.agents import Tool
@@ -15,12 +16,13 @@ class CFOAgent(BaseAgent):
         )
         self.llm = get_llm(temperature=0.1)
         self.data_service = DataService()
-        self.org_id = None  # Will be set when analyzing
+        self.org_id = None
+        self.router_agent = RouterAgent()
 
     def analyze_spending(self, query: str, org_id: str) -> str:
         """Analyze spending with AI insights"""
         # Get data from database
-        spending_data = self.data_service.get_spending_by_org(org_id)
+        spending_data = self.data_service.get_spending_summary(org_id)
 
         if not spending_data:
             return "No spending data available"
@@ -81,7 +83,9 @@ class CFOAgent(BaseAgent):
 
     def forecast_cashflow(self, query: str, org_id: str) -> str:
         """Cashflow forecasting"""
+
         org_id = org_id or self.org_id
+
         if not org_id:
             return "Please select an organization to forecast cashflow."
 
@@ -150,7 +154,7 @@ class CFOAgent(BaseAgent):
 
     def chat(self, message: str, org_id: str = None) -> str:
         """Main chat interface - routes to appropriate function"""
-        # Set org_id if provided
+
         if org_id:
             self.org_id = org_id
 
@@ -160,33 +164,7 @@ class CFOAgent(BaseAgent):
         message_lower = message.lower()
 
         try:
-            if any(
-                word in message_lower
-                for word in ["spend", "expense", "cost", "purchase"]
-            ):
-                response = self.analyze_spending(message, self.org_id)
-            elif any(
-                word in message_lower
-                for word in ["budget", "variance", "over", "under"]
-            ):
-                response = self.analyze_budget(message, self.org_id)
-            elif any(
-                word in message_lower for word in ["cash", "flow", "forecast", "runway"]
-            ):
-                response = self.forecast_cashflow(message, self.org_id)
-            elif any(
-                word in message_lower for word in ["alert", "warning", "critical"]
-            ):
-                response = self.get_alerts_summary(self.org_id)
-            elif any(word in message_lower for word in ["health", "status"]):
-                response = self.check_budget_health(self.org_id)
-            else:
-                # General query - analyze spending by default
-                response = self.analyze_spending(message, self.org_id)
-
-            # Save to history if method exists
-            if hasattr(self, "save_chat_history"):
-                self.save_chat_history(message, response)
+            response = self.router_agent.route_query(message_lower, self.org_id)
 
             return response
 
