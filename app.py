@@ -467,6 +467,8 @@ if tab4 is not None:
             user_id = current_user.get("id")
             org_id = current_user.get("organization_id")
 
+            my_proposal = st.session_state.data_service.get_my_proposals(current_user)
+
             # projects = st.session_state.data_service.get_assigned_projects(
             #     user_id, org_id
             # )
@@ -503,8 +505,115 @@ if tab4 is not None:
                     )
                     if res.get("success"):
                         st.success("Expense request submitted for manager approval")
+                        st.rerun()
                     else:
                         st.error(res.get("error", "Submission failed"))
+
+            # Display employee's spending proposals
+            st.divider()
+            st.subheader("📋 My Expense Requests")
+
+            if my_proposal:
+                for proposal in my_proposal:
+                    # Determine status styling
+                    status = proposal.get("status", "").lower()
+                    if status == "approved":
+                        status_icon = "✅"
+                        status_color = "green"
+                    elif status == "rejected":
+                        status_icon = "❌"
+                        status_color = "red"
+                    elif status == "pending":
+                        status_icon = "⏳"
+                        status_color = "orange"
+                    else:
+                        status_icon = "ℹ️"
+                        status_color = "gray"
+
+                    # Format created_at timestamp
+                    created_at = proposal.get("created_at", "")
+                    if created_at:
+                        try:
+                            dt = datetime.fromisoformat(
+                                created_at.replace("Z", "+00:00")
+                            )
+                            formatted_time = dt.strftime("%b %d, %Y %I:%M %p")
+                        except:
+                            formatted_time = created_at
+                    else:
+                        formatted_time = "N/A"
+
+                    with st.expander(
+                        f"{status_icon} {proposal.get('project_id', 'N/A')} • ${float(proposal.get('amount', 0)):,.2f} • {status.upper()}"
+                    ):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(
+                                f"**Project ID:** {proposal.get('project_id', 'N/A')}"
+                            )
+                            st.write(f"**Department:** {proposal.get('dept', 'N/A')}")
+                            st.write(
+                                f"**Amount:** ${float(proposal.get('amount', 0)):,.2f}"
+                            )
+                        with col2:
+                            st.write(f"**Status:** {status_icon} {status.upper()}")
+                            st.write(f"**Submitted:** {formatted_time}")
+                            if proposal.get("updated_at"):
+                                try:
+                                    dt_updated = datetime.fromisoformat(
+                                        proposal.get("updated_at").replace(
+                                            "Z", "+00:00"
+                                        )
+                                    )
+                                    st.write(
+                                        f"**Last Updated:** {dt_updated.strftime('%b %d, %Y %I:%M %p')}"
+                                    )
+                                except:
+                                    pass
+
+                        st.write(f"**Description:**")
+                        st.write(proposal.get("description", "No description provided"))
+
+                        # Show approval history if available
+                        if status in ["approved", "rejected"]:
+                            approval_history = (
+                                st.session_state.data_service.get_approval_history(
+                                    proposal.get("id")
+                                )
+                            )
+                            if approval_history:
+                                st.write("**Approval Workflow History:**")
+                                for step in approval_history:
+                                    step_status = step.get("status", "").lower()
+                                    step_icon = (
+                                        "✅"
+                                        if step_status == "approved"
+                                        else "❌" if step_status == "rejected" else "⏳"
+                                    )
+                                    step_time = step.get("approved_at") or step.get(
+                                        "created_at", ""
+                                    )
+                                    if step_time:
+                                        try:
+                                            dt_step = datetime.fromisoformat(
+                                                step_time.replace("Z", "+00:00")
+                                            )
+                                            formatted_step_time = dt_step.strftime(
+                                                "%b %d, %Y %I:%M %p"
+                                            )
+                                        except:
+                                            formatted_step_time = step_time
+                                    else:
+                                        formatted_step_time = "N/A"
+
+                                    st.markdown(
+                                        f"{step_icon} **{step.get('approval_level', 'N/A').upper()}** - {step_status.upper()} - {formatted_step_time}"
+                                    )
+                                    if step.get("comments"):
+                                        st.caption(f"💬 {step.get('comments')}")
+            else:
+                st.info("You haven't submitted any expense requests yet.")
+
         else:
             # Managers/Admins: two subtabs
             t_manage, t_approvals = st.tabs(

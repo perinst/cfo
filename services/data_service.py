@@ -794,6 +794,7 @@ class DataService:
                 self.db.table("spending_proposals")
                 .select("*")
                 .eq("requested_by", current_user["id"])
+                .eq("organization_id", current_user["organization_id"])
                 .order("created_at", desc=True)
                 .execute()
             )
