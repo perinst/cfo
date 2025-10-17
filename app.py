@@ -7,17 +7,18 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import pandas as pd
 from auth.roles import is_admin, is_manager, is_employee
-from auth.session_manager import SessionManager
 
 
-current_user = SessionManager.get_current_user()
-
-if not current_user:
+if "auth_user" not in st.session_state or not st.session_state["auth_user"]:
     st.info("Please sign in to continue.")
+    # Use direct navigation to avoid KeyError in st.page_link on some Streamlit versions
     try:
         st.switch_page("pages/Login.py")
     except Exception:
+        # Fallback: stop execution and let user select Login from sidebar/pages
         st.stop()
+
+current_user = st.session_state["auth_user"]
 
 # Page config
 st.set_page_config(page_title="AI CFO Assistant", page_icon="💼", layout="wide")
@@ -102,8 +103,8 @@ with tab2:
     # Get data
     summary = st.session_state.data_service.get_spending_summary(org_id, 30)
     budgets = st.session_state.data_service.get_budget_analysis(org_id)
-    invoices = st.session_state.data_service.get_overdue_invoices(org_id)
-    budget_usage = st.session_state.data_service.calculate_budget_usage(org_id=org_id)
+    invoices = st.session_state.data_service.get_overdue_invoices()
+    budget_usage = st.session_state.data_service.calculate_budget_usage()
 
     with col1:
         st.metric(
@@ -307,7 +308,7 @@ with tab3:
             "Cost Optimization",
         ],
     )
-    org_id = current_user.get("organization_id")
+    org_id = (current_user.get("organization_id"),)
     if st.button("Generate Analysis"):
         with st.spinner("Generating insights..."):
             if analysis_type == "Spending Trends":
@@ -460,32 +461,38 @@ with tab_tx:
 if tab4 is not None:
     with tab4:
         # Employees: simple proposal submission form
-        if is_employee(current_user) and not (
-            is_admin(current_user) or is_manager(current_user)
-        ):
+        if is_employee(current_user):
             st.subheader("📝 Submit Expense Request")
+
+            user_id = current_user.get("id")
+            org_id = current_user.get("organization_id")
+
+            # projects = st.session_state.data_service.get_assigned_projects(
+            #     user_id, org_id
+            # )
+
             with st.form("proposal_form_employee"):
                 p_project = st.text_input("Project ID *")
                 p_dept = st.text_input("Department")
                 p_amount = st.number_input("Amount ($) *", min_value=0.0, step=50.0)
                 p_desc = st.text_area("Reason / Description *")
-                doc = st.file_uploader(
-                    "Attach documentation (optional)",
-                    type=["pdf", "png", "jpg", "jpeg", "doc", "docx"],
-                )
+                # doc = st.file_uploader(
+                #     "Attach documentation (optional)",
+                #     type=["pdf", "png", "jpg", "jpeg", "doc", "docx"],
+                # )
                 submitted = st.form_submit_button("Submit Request")
                 if submitted:
                     doc_url = None
-                    if doc is not None:
-                        upload = st.session_state.data_service.upload_proposal_document(
-                            current_user, doc.getvalue(), doc.name
-                        )
-                        if upload.get("success"):
-                            doc_url = upload.get("url")
-                        else:
-                            st.warning(
-                                "Document upload failed; submitting without attachment."
-                            )
+                    # if doc is not None:
+                    #     upload = st.session_state.data_service.upload_proposal_document(
+                    #         current_user, doc.getvalue(), doc.name
+                    #     )
+                    #     if upload.get("success"):
+                    #         doc_url = upload.get("url")
+                    #     else:
+                    #         st.warning(
+                    #             "Document upload failed; submitting without attachment."
+                    #         )
                     res = st.session_state.data_service.submit_spending_proposal(
                         current_user=current_user,
                         project_id=p_project,
@@ -825,7 +832,7 @@ with st.sidebar:
     st.write(f"Org: {current_user.get('organization_id') or 'N/A'}")
 
     if st.button("Sign out"):
-        SessionManager.clear_user()
+        st.session_state.pop("auth_user", None)
         st.rerun()
 
     st.info(

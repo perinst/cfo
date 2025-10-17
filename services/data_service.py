@@ -744,6 +744,9 @@ class DataService:
             print(f"Error in calculate_budget_usage: {e}")
             return {"error": str(e)}
 
+    def get_assigned_projects(self, user_id: int, org_id: int) -> Dict:
+        self.ac.get_assigned_projects(user_id, org_id)
+
     def submit_spending_proposal(
         self,
         current_user: Dict,
@@ -802,17 +805,15 @@ class DataService:
     def get_pending_proposals_for_manager(self, current_user: Dict) -> List[Dict]:
         """Managers see pending proposals for their assigned projects."""
         try:
-            if not (current_user and is_manager(current_user)) and not is_admin(
-                current_user
-            ):
+            if not (current_user and is_manager(current_user)):
                 return []
-            assigned = (
-                self.ac.get_assigned_projects(
-                    current_user["id"], current_user["organization_id"]
-                )
-                if is_manager(current_user)
-                else None
-            )
+            # assigned = (
+            #     self.ac.get_assigned_projects(
+            #         current_user["id"], current_user["organization_id"]
+            #     )
+            #     if is_manager(current_user)
+            #     else None
+            # )
             q = (
                 self.db.table("spending_proposals")
                 .select("*")
@@ -821,8 +822,8 @@ class DataService:
             )
             res = q.execute()
             rows = res.data or []
-            if is_manager(current_user):
-                rows = [r for r in rows if r.get("project_id") in assigned]
+            # if is_manager(current_user):
+            #     rows = [r for r in rows if r.get("project_id") in assigned]
             return rows
         except Exception as e:
             print(f"Error in get_pending_proposals_for_manager: {e}")
