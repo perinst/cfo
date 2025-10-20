@@ -1,9 +1,7 @@
-# agents/cfo_agent.py - FIXED VERSION
 from agents.base_agent import BaseAgent
 from agents.router_agent import RouterAgent
 from config.llm_config import get_llm
 from services.data_service import DataService
-from langchain.agents import Tool
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 import json
