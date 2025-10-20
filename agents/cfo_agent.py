@@ -2,7 +2,6 @@ from agents.base_agent import BaseAgent
 from agents.router_agent import RouterAgent
 from config.llm_config import get_llm
 from services.data_service import DataService
-from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 import json
 
@@ -29,7 +28,7 @@ class CFOAgent(BaseAgent):
         prompt = f"""
         As a CFO, analyze this spending data from our database:
         
-        Total Spent (30 days): ${spending_data['total_spent']:,.2f}
+        Total Spent (90 days): ${spending_data['total_spent']:,.2f}
         Number of Transactions: {spending_data['transaction_count']}
         Average Transaction: ${spending_data['avg_transaction']:,.2f}
         
@@ -73,11 +72,9 @@ class CFOAgent(BaseAgent):
             3. Action items
             """,
         )
-
-        chain = LLMChain(llm=self.llm, prompt=prompt)
-        response = chain.run(budgets=json.dumps(budgets[:10]), query=query)
-
-        return response
+        filled = prompt.format(budgets=json.dumps(budgets[:10]), query=query)
+        response = self.llm.invoke(filled)
+        return getattr(response, "content", response)
 
     def forecast_cashflow(self, query: str, org_id: str) -> str:
         """Cashflow forecasting"""
@@ -104,11 +101,9 @@ class CFOAgent(BaseAgent):
             3. Recommendations for improvement
             """,
         )
-
-        chain = LLMChain(llm=self.llm, prompt=prompt)
-        response = chain.run(forecast=json.dumps(forecast), query=query)
-
-        return response
+        filled = prompt.format(forecast=json.dumps(forecast), query=query)
+        response = self.llm.invoke(filled)
+        return getattr(response, "content", response)
 
     def check_budget_health(self, org_id: str) -> str:
         """Check budget status with AI recommendations"""
