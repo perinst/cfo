@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import os
 from datetime import datetime
 
@@ -17,13 +17,14 @@ class StripeService:
     """
 
     def __init__(self, api_key: Optional[str] = None):
-        api_key = (
-            api_key or os.getenv("STRIPE_API_KEY") or os.getenv("STRIPE_SECRET_KEY")
-        )
+        api_key = api_key or os.getenv("STRIPE_API_KEY")
         if not api_key:
             raise ValueError("Missing STRIPE_API_KEY/STRIPE_SECRET_KEY in environment")
         stripe.api_key = api_key
         self.db: Client = get_db()
+        # optional feature flags
+        self.enabled = os.getenv("STRIPE_ENABLED", "1") not in {"0", "false", "False"}
+        self.dry_run = os.getenv("STRIPE_DRY_RUN", "0") in {"1", "true", "True"}
 
     # ------------- Public sync API -------------
     def sync_recent(self, organization_id: str, days: int = 7) -> Dict:
@@ -49,6 +50,145 @@ class StripeService:
                     count += 1
 
             return {"success": True, "synced": count}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ------------- Disbursement (Connect) API -------------
+    def is_account_payout_ready(self, account_id: str) -> Tuple[bool, Optional[str]]:
+        """Check if a connected account can receive payouts (KYC/AML, requirements)."""
+        try:
+            acct = stripe.Account.retrieve(account_id)
+            if getattr(acct, "deleted", False):
+                return False, "Stripe account deleted"
+            if not acct.get("payouts_enabled", False):
+                reason = None
+                reqs = acct.get("requirements") or {}
+                if reqs.get("disabled_reason"):
+                    reason = reqs.get("disabled_reason")
+                return False, reason or "Payouts not enabled"
+            return True, None
+        except Exception as e:
+            return False, str(e)
+
+    def transfer_and_payout(
+        self,
+        *,
+        organization_id: str,
+        to_account_id: str,
+        amount_usd: float,
+        currency: str = "USD",
+        project_id: Optional[str] = None,
+        employee_id: Optional[str] = None,
+        created_by: Optional[str] = None,
+        proposal_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> Dict:
+        """
+        Move funds from platform balance to a connected account (transfer),
+        then initiate a payout from the connected account to their external bank.
+
+        Returns { success, transfer_id, payout_id, status, message }
+        Also creates a 'transactions' row with transaction_id=payout_id for webhook reconciliation.
+        """
+        try:
+            if not self.enabled:
+                return {
+                    "success": False,
+                    "error": "Stripe disabled via STRIPE_ENABLED=0",
+                }
+
+            # KYC/AML gate
+            ready, reason = self.is_account_payout_ready(to_account_id)
+            if not ready:
+                return {
+                    "success": False,
+                    "error": f"Account not payout-ready: {reason}",
+                }
+
+            # normalize currency/amount
+            currency = (currency or "USD").lower()
+            amount_cents = int(round((amount_usd or 0.0) * 100))
+            if amount_cents <= 0:
+                return {"success": False, "error": "Amount must be > 0"}
+
+            meta = {
+                "organization_id": str(organization_id),
+                "project_id": str(project_id) if project_id else None,
+                "employee_id": str(employee_id) if employee_id else None,
+                "proposal_id": str(proposal_id) if proposal_id else None,
+            }
+
+            # Perform transfer to connected account
+            transfer_kwargs = {
+                "amount": amount_cents,
+                "currency": currency,
+                "destination": to_account_id,
+                "metadata": {k: v for k, v in meta.items() if v is not None},
+            }
+            headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+
+            if self.dry_run:
+                transfer_id = f"tr_test_{datetime.utcnow().timestamp()}"
+            else:
+                tr = stripe.Transfer.create(
+                    **transfer_kwargs, idempotency_key=idempotency_key
+                )
+                transfer_id = tr.id
+
+            # Create payout from connected account to their external account
+            payout_kwargs = {
+                "amount": amount_cents,
+                "currency": currency,
+                "metadata": {k: v for k, v in meta.items() if v is not None},
+            }
+            if self.dry_run:
+                payout_id = f"po_test_{datetime.utcnow().timestamp()}"
+                payout_status = "pending"
+            else:
+                po = stripe.Payout.create(
+                    **payout_kwargs,
+                    stripe_account=to_account_id,
+                    idempotency_key=idempotency_key,
+                )
+                payout_id = po.id
+                payout_status = po.status
+
+            # Record the payout as a transaction for reconciliation (webhook will update status)
+            tx_row = {
+                "transaction_id": payout_id,
+                "amount": amount_cents / 100.0,
+                "date": datetime.utcnow().date().isoformat(),
+                "category": "payout",
+                "merchant": "Stripe",
+                "employee_id": employee_id,
+                "fraud_flag": 0,
+                "description": f"Payout for proposal {proposal_id or ''} (transfer {transfer_id})".strip(),
+                "payment_method": "bank",
+                "currency": currency.upper(),
+                "status": payout_status or "pending",
+                "approval_required": 0,
+                "organization_id": organization_id,
+                "created_by": created_by,
+                "project_id": project_id,
+            }
+            try:
+                self.db.table("transactions").upsert(
+                    tx_row, on_conflict="transaction_id"
+                ).execute()
+            except Exception:
+                # Fallback without project_id if schema missing
+                data2 = tx_row.copy()
+                data2.pop("project_id", None)
+                self.db.table("transactions").upsert(
+                    data2, on_conflict="transaction_id"
+                ).execute()
+
+            return {
+                "success": True,
+                "transfer_id": transfer_id,
+                "payout_id": payout_id,
+                "status": payout_status,
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
 

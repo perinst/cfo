@@ -29,6 +29,83 @@ class DataService:
             self._stripe = StripeService()
         return self._stripe
 
+    # ---------------- Users / Stripe helpers ----------------
+    def _get_user_stripe_account(self, user_id: str) -> Optional[str]:
+        """Resolve Stripe connected account id for a user.
+        Priority: corporate_cards.stripe_account_id (for this user) -> users.stripe_account_id (legacy)
+        """
+        # 1) Try corporate_cards (prefers active cards; fallback to any)
+        try:
+            cr = (
+                self.db.table("corporate_cards")
+                .select("stripe_account_id, status")
+                .eq("user_id", user_id)
+                .order("created_at", desc=True)
+                .limit(3)
+                .execute()
+            )
+            if cr.data:
+                # Prefer first non-null stripe_account_id with active status
+                active = next(
+                    (
+                        (row or {}).get("stripe_account_id")
+                        for row in cr.data
+                        if (row or {}).get("stripe_account_id") and str((row or {}).get("status", "")).lower() == "active"
+                    ),
+                    None,
+                )
+                if active:
+                    return active
+                # Otherwise any non-null
+                any_acct = next(
+                    (
+                        (row or {}).get("stripe_account_id")
+                        for row in cr.data
+                        if (row or {}).get("stripe_account_id")
+                    ),
+                    None,
+                )
+                if any_acct:
+                    return any_acct
+        except Exception:
+            pass
+
+        # 2) Fallback to legacy users.stripe_account_id if the column exists
+        try:
+            r = (
+                self.db.table("users")
+                .select("id, stripe_account_id")
+                .eq("id", user_id)
+                .limit(1)
+                .execute()
+            )
+            if r.data:
+                return (r.data[0] or {}).get("stripe_account_id")
+        except Exception:
+            pass
+        return None
+
+    def _has_active_bank_connection(self, user_id: str, organization_id: str) -> bool:
+        """Optional compliance gate: ensure user has an active bank connection row.
+        Accepts statuses: active/connected/verified. Returns False on errors.
+        """
+        try:
+            res = (
+                self.db.table("bank_connections")
+                .select("id, status")
+                .eq("user_id", user_id)
+                .eq("organization_id", organization_id)
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if not res.data:
+                return False
+            status = (res.data[0] or {}).get("status", "").lower()
+            return status in {"active", "connected", "verified"}
+        except Exception:
+            return False
+
     def sync_transactions_from_stripe(self, current_user: Dict, days: int = 7) -> Dict:
         """Admin-only: sync recent Stripe transactions into Supabase."""
         try:
@@ -903,6 +980,83 @@ class DataService:
                     "approved_at": datetime.utcnow().isoformat(),
                 }
             ).execute()
+
+            # If approved, attempt Stripe payout automatically
+            if new_status == "approved":
+                try:
+                    org_id = current_user["organization_id"]
+                    employee_id = proposal.get("requested_by")
+                    project_id = proposal.get("project_id")
+                    amount = float(proposal.get("amount") or 0)
+                    acct_id = self._get_user_stripe_account(employee_id)
+
+                    # Optional compliance gate: require an active bank connection record
+                    if not self._has_active_bank_connection(employee_id, org_id):
+                        try:
+                            self.db.table("approval_workflows").insert(
+                                {
+                                    "proposal_id": proposal_id,
+                                    "approver_id": current_user["id"],
+                                    "approval_level": "system",
+                                    "status": "pending",
+                                    "comments": "Compliance check pending: no active bank connection",
+                                    "organization_id": org_id,
+                                    "approved_at": datetime.utcnow().isoformat(),
+                                }
+                            ).execute()
+                        except Exception:
+                            pass
+
+                    if not acct_id:
+                        # mark missing account
+                        try:
+                            self.db.table("spending_proposals").update(
+                                {"payout_status": "missing_account"}
+                            ).eq("id", proposal_id).execute()
+                        except Exception:
+                            pass
+                        self.db.table("approval_workflows").insert(
+                            {
+                                "proposal_id": proposal_id,
+                                "approver_id": current_user["id"],
+                                "approval_level": "system",
+                                "status": "pending",
+                                "comments": "Stripe payout skipped: no connected account",
+                                "organization_id": org_id,
+                                "approved_at": datetime.utcnow().isoformat(),
+                            }
+                        ).execute()
+                    else:
+                        stripe_service = self._ensure_stripe()
+                        res = stripe_service.transfer_and_payout(
+                            organization_id=str(org_id),
+                            to_account_id=acct_id,
+                            amount_usd=amount,
+                            currency="USD",
+                            project_id=project_id,
+                            employee_id=str(employee_id),
+                            created_by=str(current_user.get("id")),
+                            proposal_id=str(proposal_id),
+                            idempotency_key=f"proposal_{proposal_id}",
+                        )
+                        # Update proposal with payout info
+                        updates = {}
+                        if res.get("success"):
+                            updates["payout_status"] = res.get("status") or "pending"
+                            if res.get("payout_id"):
+                                updates["payout_ref"] = res.get("payout_id")
+                        else:
+                            updates["payout_status"] = "error"
+                            updates["payout_error"] = res.get("error")
+                        try:
+                            self.db.table("spending_proposals").update(updates).eq(
+                                "id", proposal_id
+                            ).execute()
+                        except Exception:
+                            pass
+                except Exception as inner:
+                    print(f"Error while triggering payout: {inner}")
+
             return {"success": True, "data": upd.data[0] if upd.data else None}
         except Exception as e:
             print(f"Error in decide_proposal: {e}")

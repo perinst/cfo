@@ -51,9 +51,63 @@ async def stripe_webhook(request: Request):
         elif evt_type == "payout.paid":
             payout_id = data.get("id")
             if payout_id:
+                # Mark transaction paid
                 db.table("transactions").update({"status": "paid"}).eq(
                     "transaction_id", payout_id
                 ).execute()
+                # If there is a proposal link in metadata, update proposal payout_status and project budget actual_spent
+                meta = data.get("metadata") or {}
+                proposal_id = meta.get("proposal_id")
+                project_id = meta.get("project_id")
+                org_id = meta.get("organization_id")
+                amount_cents = data.get("amount") or 0
+                try:
+                    if proposal_id:
+                        db.table("spending_proposals").update(
+                            {"payout_status": "paid"}
+                        ).eq("id", proposal_id).execute()
+                except Exception:
+                    pass
+                # Increment project budget actual_spent if budget row exists
+                try:
+                    if org_id and project_id and amount_cents:
+                        amt = (amount_cents or 0) / 100.0
+                        # Find the most recent/current budget for the project
+                        q = (
+                            db.table("budgets")
+                            .select("id, actual_spent")
+                            .eq("organization_id", org_id)
+                            .eq("project_id", project_id)
+                            .order("updated_at", desc=True)
+                            .limit(1)
+                            .execute()
+                        )
+                        if q.data:
+                            b = q.data[0]
+                            new_spent = float(b.get("actual_spent") or 0) + amt
+                            db.table("budgets").update({"actual_spent": new_spent}).eq(
+                                "id", b["id"]
+                            ).execute()
+                except Exception:
+                    pass
+        elif evt_type == "payout.failed":
+            payout_id = data.get("id")
+            if payout_id:
+                db.table("transactions").update({"status": "failed"}).eq(
+                    "transaction_id", payout_id
+                ).execute()
+                meta = data.get("metadata") or {}
+                proposal_id = meta.get("proposal_id")
+                if proposal_id:
+                    try:
+                        db.table("spending_proposals").update(
+                            {"payout_status": "failed"}
+                        ).eq("id", proposal_id).execute()
+                    except Exception:
+                        pass
+        elif evt_type == "transfer.paid":
+            # Optional: record transfer status updates if needed
+            pass
         else:
             # Unhandled events are acknowledged
             pass

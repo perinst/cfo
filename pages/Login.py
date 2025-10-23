@@ -28,5 +28,8 @@ if st.button("Sign In", type="primary", use_container_width=True):
         st.error("Invalid credentials or user not found")
 
 st.caption(
-    "Use your Supabase Auth credentials. Profiles and roles are mapped via public.users"
+    "Use your Supabase Auth credentials. Profiles and roles are mapped via public.users",
+)
+st.caption(
+    "Login without password, example acc: manager@demo.com      employee@demo.com",
 )
