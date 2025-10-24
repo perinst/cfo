@@ -2,7 +2,7 @@ from agents.base_agent import BaseAgent
 from agents.router_agent import RouterAgent
 from config.llm_config import get_llm
 from services.data_service import DataService
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 import json
 
 
