@@ -9,6 +9,7 @@ import time
 import re
 import os
 from supabase import Client
+from config.enviroment import get_config
 from services.stripe_service import StripeService
 
 
@@ -1248,7 +1249,7 @@ class DataService:
                         ).execute()
                     else:
                         stripe_service = self._ensure_stripe()
-                        auto_payout = os.getenv("STRIPE_AUTOPAYOUT", "0") in {
+                        auto_payout = get_config("STRIPE_AUTOPAYOUT", "0") in {
                             "1",
                             "true",
                             "True",

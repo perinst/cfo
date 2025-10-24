@@ -2,6 +2,7 @@
 import streamlit as st
 import os
 from agents.cfo_agent import CFOAgent
+from config.enviroment import get_config
 from services.data_service import DataService
 import plotly.express as px
 import plotly.graph_objects as go
@@ -878,15 +879,73 @@ if tab4 is not None:
                 st.subheader("🏦 Stripe Connect")
                 with st.expander("Create Connected Account for Employee"):
                     with st.form("create_connected_acct_form"):
-                        emp_id = st.text_input("Employee User ID *")
-                        emp_email = st.text_input("Employee Email *")
+                        # Build a dropdown of users in this organization
+                        try:
+                            users_res = (
+                                st.session_state.data_service.db.table("users")
+                                .select(
+                                    "id, email, full_name, first_name, last_name, role, organization_id"
+                                )
+                                .eq("organization_id", org_id)
+                                .order("email")
+                                .limit(500)
+                                .execute()
+                            )
+                            _users = users_res.data or []
+                        except Exception:
+                            _users = []
+
+                        user_options = {}
+                        for u in _users:
+                            name = (
+                                u.get("full_name")
+                                or " ".join(
+                                    [
+                                        p
+                                        for p in [
+                                            u.get("first_name"),
+                                            u.get("last_name"),
+                                        ]
+                                        if p
+                                    ]
+                                ).strip()
+                            )
+                            label = f"{name or u.get('email') or u['id']}"
+                            role = u.get("role")
+                            if role:
+                                label = f"{label} • {role}"
+                            label = f"{label} • {u['id']}"
+                            user_options[label] = {
+                                "id": u["id"],
+                                "email": u.get("email"),
+                            }
+
+                        use_dropdown = len(user_options) > 0
+
+                        selected_label = None
                         emp_country = st.text_input("Country", value="US")
+                        if use_dropdown:
+                            selected_label = st.selectbox(
+                                "Select Employee", list(user_options.keys())
+                            )
+                        else:
+                            st.info(
+                                "No users found for your organization or unable to load. You can enter details manually."
+                            )
+                            emp_id = st.text_input("Employee User ID *")
+                            emp_email = st.text_input("Employee Email *")
+
                         submit_create = st.form_submit_button(
                             "Create Connected Account"
                         )
                         if submit_create:
+                            if use_dropdown:
+                                selected = user_options.get(selected_label)
+                                emp_id = selected.get("id") if selected else None
+                                emp_email = selected.get("email") if selected else None
+                            # Validate
                             if not emp_id or not emp_email:
-                                st.error("Employee ID and Email are required")
+                                st.error("Employee selection (with email) is required")
                             else:
                                 res = st.session_state.data_service.create_employee_connected_account(
                                     current_user=current_user,
@@ -908,10 +967,62 @@ if tab4 is not None:
 
                 with st.expander("Generate Onboarding Link for Employee"):
                     with st.form("onboarding_link_form"):
-                        emp_id2 = st.text_input(
-                            "Employee User ID *", key="emp_id_onboard"
-                        )
-                        base_url = os.getenv("APP_BASE_URL", "http://localhost:8501")
+                        # Build a dropdown of users in this organization
+                        try:
+                            users_res2 = (
+                                st.session_state.data_service.db.table("users")
+                                .select(
+                                    "id, email, full_name, first_name, last_name, role, organization_id"
+                                )
+                                .eq("organization_id", org_id)
+                                .order("email")
+                                .limit(500)
+                                .execute()
+                            )
+                            _users2 = users_res2.data or []
+                        except Exception:
+                            _users2 = []
+
+                        user_options2 = {}
+                        for u in _users2:
+                            name = (
+                                u.get("full_name")
+                                or " ".join(
+                                    [
+                                        p
+                                        for p in [
+                                            u.get("first_name"),
+                                            u.get("last_name"),
+                                        ]
+                                        if p
+                                    ]
+                                ).strip()
+                            )
+                            label = f"{name or u.get('email') or u['id']}"
+                            role = u.get("role")
+                            if role:
+                                label = f"{label} • {role}"
+                            label = f"{label} • {u['id']}"
+                            user_options2[label] = u["id"]
+
+                        use_dropdown2 = len(user_options2) > 0
+
+                        if use_dropdown2:
+                            selected_label2 = st.selectbox(
+                                "Select Employee",
+                                list(user_options2.keys()),
+                                key="emp_id_onboard_select",
+                            )
+                            emp_id2 = user_options2.get(selected_label2)
+                        else:
+                            st.info(
+                                "No users found for your organization or unable to load. You can enter details manually."
+                            )
+                            emp_id2 = st.text_input(
+                                "Employee User ID *", key="emp_id_onboard"
+                            )
+
+                        base_url = get_config("APP_BASE_URL", "http://localhost:8501")
                         refresh_url = st.text_input(
                             "Refresh URL", value=f"{base_url}/reauth"
                         )
@@ -919,7 +1030,7 @@ if tab4 is not None:
                         submit_link = st.form_submit_button("Generate Onboarding Link")
                         if submit_link:
                             if not emp_id2:
-                                st.error("Employee User ID is required")
+                                st.error("Employee User is required")
                             else:
                                 res = st.session_state.data_service.create_employee_onboarding_link(
                                     current_user=current_user,

@@ -3,11 +3,12 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 import stripe
 from config.database import get_db
+from config.enviroment import get_config
 
 app = FastAPI()
 
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-stripe.api_key = os.getenv("STRIPE_API_KEY") or os.getenv("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = get_config("STRIPE_WEBHOOK_SECRET", "")
+stripe.api_key = get_config("STRIPE_API_KEY")
 
 
 @app.post("/webhook/stripe")

@@ -7,6 +7,8 @@ import stripe
 from config.database import get_db
 from supabase import Client
 
+from config.enviroment import get_config
+
 
 class StripeService:
     """
@@ -17,14 +19,14 @@ class StripeService:
     """
 
     def __init__(self, api_key: Optional[str] = None):
-        api_key = api_key or os.getenv("STRIPE_API_KEY")
+        api_key = api_key or get_config("STRIPE_API_KEY")
         if not api_key:
             raise ValueError("Missing STRIPE_API_KEY/STRIPE_SECRET_KEY in environment")
         stripe.api_key = api_key
         self.db: Client = get_db()
         # optional feature flags
-        self.enabled = os.getenv("STRIPE_ENABLED", "1") not in {"0", "false", "False"}
-        self.dry_run = os.getenv("STRIPE_DRY_RUN", "0") in {"1", "true", "True"}
+        self.enabled = get_config("STRIPE_ENABLED", "1") not in {"0", "false", "False"}
+        self.dry_run = get_config("STRIPE_DRY_RUN", "0") in {"1", "true", "True"}
 
     # ------------- Public sync API -------------
     def sync_recent(self, organization_id: str, days: int = 7) -> Dict:

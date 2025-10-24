@@ -3,6 +3,8 @@ from langchain_openai import ChatOpenAI
 import os
 from dotenv import load_dotenv
 
+from config.enviroment import get_config
+
 load_dotenv()
 
 # Rebuild model để fix lỗi Pydantic
@@ -18,8 +20,8 @@ def get_llm(temperature=0.1):
     """Initialize DeepSeek LLM with OpenAI-compatible API"""
     return ChatOpenAI(
         model="deepseek-chat",
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
-        base_url=os.getenv("DEEPSEEK_BASE_URL"),
+        api_key=get_config("DEEPSEEK_API_KEY"),
+        base_url=get_config("DEEPSEEK_BASE_URL"),
         temperature=temperature,
         max_tokens=2000,
     )
