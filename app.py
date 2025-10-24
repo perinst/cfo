@@ -1,5 +1,6 @@
 # app.py
 import streamlit as st
+import os
 from agents.cfo_agent import CFOAgent
 from services.data_service import DataService
 import plotly.express as px
@@ -616,8 +617,8 @@ if tab4 is not None:
 
         else:
             # Managers/Admins: two subtabs
-            t_manage, t_approvals = st.tabs(
-                ["🔧 Manage Budgets", "✅ Approvals & History"]
+            t_manage, t_approvals, t_account = st.tabs(
+                ["🔧 Manage Budgets", "✅ Approvals & History", "🏦 Stripe Connect"]
             )
 
             # Manage Budgets tab
@@ -871,6 +872,140 @@ if tab4 is not None:
                     else:
                         st.info("No budgets available to delete.")
                     st.divider()
+
+            # Stripe Connect management for managers/admins
+            with t_account:
+                st.subheader("🏦 Stripe Connect")
+                with st.expander("Create Connected Account for Employee"):
+                    with st.form("create_connected_acct_form"):
+                        emp_id = st.text_input("Employee User ID *")
+                        emp_email = st.text_input("Employee Email *")
+                        emp_country = st.text_input("Country", value="US")
+                        submit_create = st.form_submit_button(
+                            "Create Connected Account"
+                        )
+                        if submit_create:
+                            if not emp_id or not emp_email:
+                                st.error("Employee ID and Email are required")
+                            else:
+                                res = st.session_state.data_service.create_employee_connected_account(
+                                    current_user=current_user,
+                                    employee_id=emp_id,
+                                    employee_email=emp_email,
+                                    country=emp_country or "US",
+                                )
+                                if res.get("success"):
+                                    st.success(
+                                        f"Created connected account: {res.get('account_id')}"
+                                    )
+                                else:
+                                    st.error(
+                                        res.get(
+                                            "error",
+                                            "Failed to create connected account",
+                                        )
+                                    )
+
+                with st.expander("Generate Onboarding Link for Employee"):
+                    with st.form("onboarding_link_form"):
+                        emp_id2 = st.text_input(
+                            "Employee User ID *", key="emp_id_onboard"
+                        )
+                        base_url = os.getenv("APP_BASE_URL", "http://localhost:8501")
+                        refresh_url = st.text_input(
+                            "Refresh URL", value=f"{base_url}/reauth"
+                        )
+                        return_url = st.text_input("Return URL", value=f"{base_url}/")
+                        submit_link = st.form_submit_button("Generate Onboarding Link")
+                        if submit_link:
+                            if not emp_id2:
+                                st.error("Employee User ID is required")
+                            else:
+                                res = st.session_state.data_service.create_employee_onboarding_link(
+                                    current_user=current_user,
+                                    employee_id=emp_id2,
+                                    refresh_url=refresh_url,
+                                    return_url=return_url,
+                                )
+                                if res.get("success"):
+                                    st.success("Onboarding link created")
+                                    st.markdown(
+                                        f'<a href="{res.get("url")}" target="_blank">Open onboarding link</a>',
+                                        unsafe_allow_html=True,
+                                    )
+                                else:
+                                    st.error(
+                                        res.get(
+                                            "error",
+                                            "Failed to generate onboarding link",
+                                        )
+                                    )
+                if is_admin(current_user):
+                    with st.expander("Top-up Organization Balance"):
+                        # List active corporate cards that have customer and card ids
+                        try:
+                            cards_res = (
+                                st.session_state.data_service.db.table(
+                                    "corporate_cards"
+                                )
+                                .select(
+                                    "id, card_name, status, stripe_customer_id, stripe_card_id"
+                                )
+                                .eq("organization_id", org_id)
+                                .eq("user_id", user_id)
+                                .order("created_at", desc=True)
+                                .limit(50)
+                                .execute()
+                            )
+                            cards = [
+                                c
+                                for c in (cards_res.data or [])
+                                if c.get("status", "").lower() == "active"
+                                and c.get("stripe_customer_id")
+                                and c.get("stripe_card_id")
+                            ]
+                        except Exception:
+                            cards = []
+
+                        if not cards:
+                            st.info(
+                                "No active funding cards with Stripe details found. Add a corporate card with stripe_customer_id and stripe_card_id."
+                            )
+                        else:
+                            with st.form("org_topup_form"):
+                                card_options = {
+                                    f"{c.get('card_name') or c['id']}": c["id"]
+                                    for c in cards
+                                }
+                                selected_label = st.selectbox(
+                                    "Select Card", list(card_options.keys())
+                                )
+                                selected_card_id = card_options[selected_label]
+                                topup_amount = st.number_input(
+                                    "Amount (USD)", min_value=0.0, step=50.0
+                                )
+                                topup_desc = st.text_input(
+                                    "Description", value="Organization top-up"
+                                )
+                                do_topup = st.form_submit_button("Charge and Top-up")
+                                if do_topup:
+                                    if topup_amount <= 0:
+                                        st.error("Amount must be greater than 0")
+                                    else:
+                                        res = st.session_state.data_service.admin_topup_with_corporate_card(
+                                            current_user=current_user,
+                                            corporate_card_id=selected_card_id,
+                                            amount_usd=float(topup_amount),
+                                            currency="USD",
+                                            description=topup_desc or None,
+                                        )
+                                        if res.get("success"):
+                                            st.success(
+                                                f"Top-up successful. Ref: {res.get('payment_ref')}"
+                                            )
+                                            st.rerun()
+                                        else:
+                                            st.error(res.get("error", "Top-up failed"))
 
             # Approvals & History tab
             with t_approvals:

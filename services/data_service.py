@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import time
 import re
+import os
 from supabase import Client
 from services.stripe_service import StripeService
 
@@ -30,6 +31,221 @@ class DataService:
         return self._stripe
 
     # ---------------- Users / Stripe helpers ----------------
+    def create_employee_connected_account(
+        self,
+        *,
+        current_user: Dict,
+        employee_id: str,
+        employee_email: str,
+        country: str = "US",
+    ) -> Dict:
+        """
+        Create a Stripe connected account for an employee and persist to corporate_cards.
+        - Requires admin or manager in the employee's org.
+        - If the user already has a corporate_cards row, update it; else create one minimal row.
+        Returns { success, account_id }
+        """
+        try:
+            org_id = (current_user or {}).get("organization_id")
+            if not org_id:
+                return {"success": False, "error": "No organization"}
+            if not (is_admin(current_user) or is_manager(current_user)):
+                return {"success": False, "error": "Unauthorized"}
+
+            stripe_service = self._ensure_stripe()
+            res = stripe_service.create_connected_account(
+                email=employee_email, country=country, account_type="express"
+            )
+            if not res.get("success"):
+                return res
+            account_id = res.get("account_id")
+
+            # Upsert corporate card record for the employee with stripe_account_id
+            # Prefer updating most recent card; else create a new virtual card placeholder
+            try:
+                existing = (
+                    self.db.table("corporate_cards")
+                    .select("id, stripe_account_id, status")
+                    .eq("user_id", employee_id)
+                    .eq("organization_id", org_id)
+                    .order("created_at", desc=True)
+                    .limit(1)
+                    .execute()
+                )
+                if existing.data:
+                    self.db.table("corporate_cards").update(
+                        {"stripe_account_id": account_id}
+                    ).eq("id", existing.data[0]["id"]).execute()
+                else:
+                    self.db.table("corporate_cards").insert(
+                        {
+                            "card_number": None,
+                            "card_name": "Employee Virtual",
+                            "user_id": employee_id,
+                            "organization_id": org_id,
+                            "monthly_limit": None,
+                            "transaction_limit": None,
+                            "status": "active",
+                            "card_type": "virtual",
+                            "stripe_account_id": account_id,
+                        }
+                    ).execute()
+            except Exception:
+                # If table or columns mismatch, return success with account id so caller can store elsewhere
+                pass
+
+            return {"success": True, "account_id": account_id}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def create_employee_onboarding_link(
+        self,
+        *,
+        current_user: Dict,
+        employee_id: str,
+        refresh_url: str,
+        return_url: str,
+    ) -> Dict:
+        """
+        Create an onboarding link for an employee's Stripe connected account.
+        Returns { success, url }
+        """
+        try:
+            org_id = (current_user or {}).get("organization_id")
+            if not org_id:
+                return {"success": False, "error": "No organization"}
+            if not (
+                is_admin(current_user)
+                or is_manager(current_user)
+                or is_employee(current_user)
+            ):
+                return {"success": False, "error": "Unauthorized"}
+
+            acct_id = self._get_user_stripe_account(employee_id)
+            if not acct_id:
+                return {"success": False, "error": "Employee has no connected account"}
+            stripe_service = self._ensure_stripe()
+            res = stripe_service.create_onboarding_link(
+                account_id=acct_id, refresh_url=refresh_url, return_url=return_url
+            )
+            return res
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def transfer_to_employee(
+        self,
+        *,
+        current_user: Dict,
+        employee_id: str,
+        amount_usd: float,
+        currency: str = "USD",
+        description: Optional[str] = None,
+        project_id: Optional[str] = None,
+        proposal_id: Optional[str] = None,
+    ) -> Dict:
+        """
+        Manager/Admin: Transfer funds to an employee's connected account (no auto-payout).
+        Returns { success, transfer_id }
+        """
+        try:
+            org_id = (current_user or {}).get("organization_id")
+            if not org_id:
+                return {"success": False, "error": "No organization"}
+            if not (is_admin(current_user) or is_manager(current_user)):
+                return {"success": False, "error": "Unauthorized"}
+
+            acct_id = self._get_user_stripe_account(employee_id)
+            if not acct_id:
+                return {"success": False, "error": "Employee has no connected account"}
+
+            stripe_service = self._ensure_stripe()
+            res = stripe_service.transfer_only(
+                organization_id=str(org_id),
+                to_account_id=acct_id,
+                amount_usd=amount_usd,
+                currency=currency,
+                project_id=project_id,
+                employee_id=str(employee_id),
+                created_by=str(current_user.get("id")),
+                proposal_id=str(proposal_id) if proposal_id else None,
+                idempotency_key=f"transfer_{employee_id}_{int(time.time())}",
+                description=description,
+            )
+            return res
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ---------------- Admin top-up ----------------
+    def admin_topup_with_corporate_card(
+        self,
+        *,
+        current_user: Dict,
+        corporate_card_id: str,
+        amount_usd: float,
+        currency: str = "USD",
+        description: Optional[str] = None,
+    ) -> Dict:
+        """
+        Admin-only: Top up organization funds by charging a saved bank card from corporate_cards.
+
+        Requirements:
+        - current_user is admin
+        - corporate_cards row belongs to the same organization
+        - row has stripe_customer_id and stripe_card_id
+        Records a 'topup' transaction via StripeService.
+        """
+        try:
+            org_id = (current_user or {}).get("organization_id")
+            if not org_id:
+                return {"success": False, "error": "No organization"}
+            if not is_admin(current_user):
+                return {"success": False, "error": "Only admin can top up funds"}
+            if amount_usd is None or amount_usd <= 0:
+                return {"success": False, "error": "Amount must be > 0"}
+
+            # Load and verify corporate card
+            card_q = (
+                self.db.table("corporate_cards")
+                .select(
+                    "id, organization_id, status, stripe_customer_id, stripe_card_id, card_name"
+                )
+                .eq("id", corporate_card_id)
+                .limit(1)
+                .execute()
+            )
+            if not card_q.data:
+                return {"success": False, "error": "Card not found"}
+            card = card_q.data[0]
+            if str(card.get("organization_id")) != str(org_id):
+                return {
+                    "success": False,
+                    "error": "Card does not belong to your organization",
+                }
+            if str(card.get("status", "")).lower() != "active":
+                return {"success": False, "error": "Card is not active"}
+            cust_id = card.get("stripe_customer_id")
+            pm_or_source = card.get("stripe_card_id")
+            if not cust_id or not pm_or_source:
+                return {
+                    "success": False,
+                    "error": "Card is not linked to a Stripe customer/payment method",
+                }
+
+            stripe_service = self._ensure_stripe()
+            res = stripe_service.topup_with_corporate_card(
+                organization_id=str(org_id),
+                stripe_customer_id=cust_id,
+                stripe_card_ref=pm_or_source,
+                amount_usd=amount_usd,
+                currency=currency,
+                description=description
+                or f"Org top-up via {card.get('card_name') or 'card'}",
+                idempotency_key=f"topup_{corporate_card_id}_{int(time.time())}",
+            )
+            return res
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def _get_user_stripe_account(self, user_id: str) -> Optional[str]:
         """Resolve Stripe connected account id for a user.
         Priority: corporate_cards.stripe_account_id (for this user) -> users.stripe_account_id (legacy)
@@ -50,7 +266,8 @@ class DataService:
                     (
                         (row or {}).get("stripe_account_id")
                         for row in cr.data
-                        if (row or {}).get("stripe_account_id") and str((row or {}).get("status", "")).lower() == "active"
+                        if (row or {}).get("stripe_account_id")
+                        and str((row or {}).get("status", "")).lower() == "active"
                     ),
                     None,
                 )
@@ -1028,32 +1245,69 @@ class DataService:
                         ).execute()
                     else:
                         stripe_service = self._ensure_stripe()
-                        res = stripe_service.transfer_and_payout(
-                            organization_id=str(org_id),
-                            to_account_id=acct_id,
-                            amount_usd=amount,
-                            currency="USD",
-                            project_id=project_id,
-                            employee_id=str(employee_id),
-                            created_by=str(current_user.get("id")),
-                            proposal_id=str(proposal_id),
-                            idempotency_key=f"proposal_{proposal_id}",
-                        )
-                        # Update proposal with payout info
-                        updates = {}
-                        if res.get("success"):
-                            updates["payout_status"] = res.get("status") or "pending"
-                            if res.get("payout_id"):
-                                updates["payout_ref"] = res.get("payout_id")
+                        auto_payout = os.getenv("STRIPE_AUTOPAYOUT", "0") in {
+                            "1",
+                            "true",
+                            "True",
+                        }
+                        if auto_payout:
+                            res = stripe_service.transfer_and_payout(
+                                organization_id=str(org_id),
+                                to_account_id=acct_id,
+                                amount_usd=amount,
+                                currency="USD",
+                                project_id=project_id,
+                                employee_id=str(employee_id),
+                                created_by=str(current_user.get("id")),
+                                proposal_id=str(proposal_id),
+                                idempotency_key=f"proposal_{proposal_id}",
+                            )
+                            # Update proposal with payout info
+                            updates = {}
+                            if res.get("success"):
+                                updates["payout_status"] = (
+                                    res.get("status") or "pending"
+                                )
+                                if res.get("payout_id"):
+                                    updates["payout_ref"] = res.get("payout_id")
+                            else:
+                                updates["payout_status"] = "error"
+                                updates["payout_error"] = res.get("error")
+                            try:
+                                self.db.table("spending_proposals").update(updates).eq(
+                                    "id", proposal_id
+                                ).execute()
+                            except Exception:
+                                pass
                         else:
-                            updates["payout_status"] = "error"
-                            updates["payout_error"] = res.get("error")
-                        try:
-                            self.db.table("spending_proposals").update(updates).eq(
-                                "id", proposal_id
-                            ).execute()
-                        except Exception:
-                            pass
+                            # Transfer only; employee will withdraw via Stripe payout schedule
+                            res = stripe_service.transfer_only(
+                                organization_id=str(org_id),
+                                to_account_id=acct_id,
+                                amount_usd=amount,
+                                currency="USD",
+                                project_id=project_id,
+                                employee_id=str(employee_id),
+                                created_by=str(current_user.get("id")),
+                                proposal_id=str(proposal_id),
+                                idempotency_key=f"proposal_{proposal_id}",
+                                description=f"Approved expense proposal {proposal_id}",
+                            )
+                            # Update proposal with transfer info
+                            updates = {}
+                            if res.get("success"):
+                                updates["payout_status"] = "transferred"
+                                if res.get("transfer_id"):
+                                    updates["payout_ref"] = res.get("transfer_id")
+                            else:
+                                updates["payout_status"] = "error"
+                                updates["payout_error"] = res.get("error")
+                            try:
+                                self.db.table("spending_proposals").update(updates).eq(
+                                    "id", proposal_id
+                                ).execute()
+                            except Exception:
+                                pass
                 except Exception as inner:
                     print(f"Error while triggering payout: {inner}")
 

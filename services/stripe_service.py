@@ -53,6 +53,67 @@ class StripeService:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    # ------------- Connected accounts (Create/Onboard) -------------
+    def create_connected_account(
+        self,
+        *,
+        email: str,
+        country: str = "US",
+        account_type: str = "express",
+        capabilities: Optional[Dict] = None,
+    ) -> Dict:
+        """
+        Create a Stripe connected account for an employee.
+        Returns { success, account_id, account }
+        """
+        try:
+            caps = capabilities or {"transfers": {"requested": True}}
+            if self.dry_run:
+                fake_id = f"acct_test_{int(datetime.utcnow().timestamp())}"
+                return {
+                    "success": True,
+                    "account_id": fake_id,
+                    "account": {"id": fake_id},
+                }
+            acct = stripe.Account.create(
+                type=account_type,
+                country=country,
+                email=email,
+                capabilities=caps,
+            )
+            return {"success": True, "account_id": acct.id, "account": acct}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def create_onboarding_link(
+        self,
+        *,
+        account_id: str,
+        refresh_url: str,
+        return_url: str,
+        link_type: str = "account_onboarding",
+    ) -> Dict:
+        """
+        Create an AccountLink for onboarding a connected account (to add bank, verify identity).
+        Returns { success, url, expires_at }
+        """
+        try:
+            if self.dry_run:
+                return {
+                    "success": True,
+                    "url": f"https://connect.stripe.com/setup/s/test/{account_id}",
+                    "expires_at": int(datetime.utcnow().timestamp()) + 300,
+                }
+            link = stripe.AccountLink.create(
+                account=account_id,
+                refresh_url=refresh_url,
+                return_url=return_url,
+                type=link_type,
+            )
+            return {"success": True, "url": link.url, "expires_at": link.expires_at}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     # ------------- Disbursement (Connect) API -------------
     def is_account_payout_ready(self, account_id: str) -> Tuple[bool, Optional[str]]:
         """Check if a connected account can receive payouts (KYC/AML, requirements)."""
@@ -69,6 +130,191 @@ class StripeService:
             return True, None
         except Exception as e:
             return False, str(e)
+
+    # ------------- Platform funding (Top-up) -------------
+    def topup_with_corporate_card(
+        self,
+        *,
+        organization_id: str,
+        stripe_customer_id: str,
+        stripe_card_ref: str,
+        amount_usd: float,
+        currency: str = "USD",
+        description: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> Dict:
+        """
+        Charge a saved card belonging to the platform's Stripe customer to top up funds.
+        Accepts either a PaymentMethod id (pm_...) or legacy Source/Card id (card_/src_...).
+
+        Records a transaction row with category 'topup'.
+        Returns { success, payment_ref, status }
+        """
+        try:
+            if not self.enabled:
+                return {
+                    "success": False,
+                    "error": "Stripe disabled via STRIPE_ENABLED=0",
+                }
+
+            currency_l = (currency or "USD").lower()
+            amount_cents = int(round((amount_usd or 0.0) * 100))
+            if amount_cents <= 0:
+                return {"success": False, "error": "Amount must be > 0"}
+
+            payment_ref = None
+            status = "pending"
+            meta = {"organization_id": str(organization_id)}
+
+            if self.dry_run:
+                payment_ref = f"pi_test_{datetime.utcnow().timestamp()}"
+                status = "succeeded"
+            else:
+                # Prefer PaymentIntent + PaymentMethod flow when pm_ id provided
+                try:
+                    kwargs = {
+                        "amount": amount_cents,
+                        "currency": currency_l,
+                        "customer": stripe_customer_id,
+                        "description": description or "Organization top-up",
+                        "metadata": meta,
+                        "confirm": True,
+                        "off_session": True,
+                        "payment_method_types": ["card"],
+                    }
+
+                    if stripe_card_ref and stripe_card_ref.startswith("pm_"):
+                        kwargs["payment_method"] = stripe_card_ref
+                    pi = stripe.PaymentIntent.create(
+                        **kwargs,
+                        idempotency_key=idempotency_key,
+                    )
+                    payment_ref = pi.id
+                    status = getattr(pi, "status", None) or status
+                except Exception:
+                    # Fallback to Charges API for legacy card/source ids
+                    ch = stripe.Charge.create(
+                        amount=amount_cents,
+                        currency=currency_l,
+                        customer=stripe_customer_id,
+                        source=stripe_card_ref,
+                        description=description or "Organization top-up",
+                        metadata=meta,
+                        idempotency_key=idempotency_key,
+                    )
+                    payment_ref = ch.id
+                    status = getattr(ch, "status", None) or status
+
+            tx_row = {
+                "transaction_id": payment_ref,
+                "amount": amount_cents / 100.0,
+                "date": datetime.utcnow().date().isoformat(),
+                "category": "topup",
+                "merchant": "Stripe",
+                "employee_id": None,
+                "fraud_flag": 0,
+                "description": description or "Organization top-up",
+                "payment_method": "card",
+                "currency": currency_l.upper(),
+                "status": status,
+                "approval_required": 0,
+                "organization_id": organization_id,
+                "created_by": None,
+                "project_id": None,
+            }
+
+            self._upsert_transaction(tx_row)
+
+            return {"success": True, "payment_ref": payment_ref, "status": status}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def transfer_only(
+        self,
+        *,
+        organization_id: str,
+        to_account_id: str,
+        amount_usd: float,
+        currency: str = "USD",
+        project_id: Optional[str] = None,
+        employee_id: Optional[str] = None,
+        created_by: Optional[str] = None,
+        proposal_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> Dict:
+        """
+        Only move funds from platform balance to a connected account (Transfer).
+        Records a 'transactions' row with category 'transfer'.
+        """
+        try:
+            if not self.enabled:
+                return {
+                    "success": False,
+                    "error": "Stripe disabled via STRIPE_ENABLED=0",
+                }
+
+            currency = (currency or "USD").lower()
+            amount_cents = int(round((amount_usd or 0.0) * 100))
+            if amount_cents <= 0:
+                return {"success": False, "error": "Amount must be > 0"}
+
+            meta = {
+                "organization_id": str(organization_id),
+                "project_id": str(project_id) if project_id else None,
+                "employee_id": str(employee_id) if employee_id else None,
+                "proposal_id": str(proposal_id) if proposal_id else None,
+            }
+
+            transfer_kwargs = {
+                "amount": amount_cents,
+                "currency": currency,
+                "destination": to_account_id,
+                "metadata": {k: v for k, v in meta.items() if v is not None},
+                "description": description,
+            }
+
+            if self.dry_run:
+                transfer_id = f"tr_test_{datetime.utcnow().timestamp()}"
+                status = "pending"
+            else:
+                tr = stripe.Transfer.create(
+                    **transfer_kwargs, idempotency_key=idempotency_key
+                )
+                transfer_id = tr.id
+                status = getattr(tr, "status", None) or "pending"
+
+            tx_row = {
+                "transaction_id": transfer_id,
+                "amount": amount_cents / 100.0,
+                "date": datetime.utcnow().date().isoformat(),
+                "category": "transfer",
+                "merchant": "Stripe",
+                "employee_id": employee_id,
+                "fraud_flag": 0,
+                "description": description or f"Transfer to {to_account_id}",
+                "payment_method": "stripe_balance",
+                "currency": currency.upper(),
+                "status": status,
+                "approval_required": 0,
+                "organization_id": organization_id,
+                "created_by": created_by,
+                "project_id": project_id,
+            }
+            try:
+                self.db.table("transactions").upsert(
+                    tx_row, on_conflict="transaction_id"
+                ).execute()
+            except Exception:
+                data2 = tx_row.copy()
+                data2.pop("project_id", None)
+                self.db.table("transactions").upsert(
+                    data2, on_conflict="transaction_id"
+                ).execute()
+
+            return {"success": True, "transfer_id": transfer_id, "status": status}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def transfer_and_payout(
         self,
