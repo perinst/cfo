@@ -207,7 +207,7 @@ class DataService:
             card_q = (
                 self.db.table("corporate_cards")
                 .select(
-                    "id, organization_id, status, stripe_customer_id, stripe_card_id, card_name"
+                    "id, organization_id, status, stripe_customer_id, stripe_card_id, card_name, stripe_account_id"
                 )
                 .eq("id", corporate_card_id)
                 .limit(1)
@@ -303,12 +303,12 @@ class DataService:
         return None
 
     def _has_active_bank_connection(self, user_id: str, organization_id: str) -> bool:
-        """Optional compliance gate: ensure user has an active bank connection row.
+        """Optional compliance gate: ensure user has an active corporate_card row.
         Accepts statuses: active/connected/verified. Returns False on errors.
         """
         try:
             res = (
-                self.db.table("bank_connections")
+                self.db.table("corporate_card")
                 .select("id, status")
                 .eq("user_id", user_id)
                 .eq("organization_id", organization_id)
@@ -323,6 +323,7 @@ class DataService:
         except Exception:
             return False
 
+    # -----------------------TRANSACTIONS--------------------------#
     def sync_transactions_from_stripe(self, current_user: Dict, days: int = 7) -> Dict:
         """Admin-only: sync recent Stripe transactions into Supabase."""
         try:
@@ -687,6 +688,7 @@ class DataService:
             print(f"Error in get_cashflow_forecast: {e}")
             return {"error": str(e)}
 
+    # ----------------------------- BUDGET------------------------------#
     def get_budget_filter_options(
         self, current_user: Optional[Dict] = None
     ) -> Dict[str, List]:
@@ -1041,6 +1043,7 @@ class DataService:
     def get_assigned_projects(self, user_id: int, org_id: int) -> Dict:
         self.ac.get_assigned_projects(user_id, org_id)
 
+    # ---------------------------------PROPOSAL ---------------------------------#
     def submit_spending_proposal(
         self,
         current_user: Dict,

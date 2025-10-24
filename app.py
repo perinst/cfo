@@ -461,12 +461,12 @@ with tab_tx:
                                 st.error(r.get("error", "Error"))
 if tab4 is not None:
     with tab4:
-        # Employees: simple proposal submission form
+
+        user_id = current_user.get("id")
+        org_id = current_user.get("organization_id")
+
         if is_employee(current_user):
             st.subheader("📝 Submit Expense Request")
-
-            user_id = current_user.get("id")
-            org_id = current_user.get("organization_id")
 
             my_proposal = st.session_state.data_service.get_my_proposals(current_user)
 
@@ -940,6 +940,7 @@ if tab4 is not None:
                                             "Failed to generate onboarding link",
                                         )
                                     )
+
                 if is_admin(current_user):
                     with st.expander("Top-up Organization Balance"):
                         # List active corporate cards that have customer and card ids
@@ -949,7 +950,7 @@ if tab4 is not None:
                                     "corporate_cards"
                                 )
                                 .select(
-                                    "id, card_name, status, stripe_customer_id, stripe_card_id"
+                                    "id, card_name, status, stripe_customer_id, stripe_card_id, stripe_account_id"
                                 )
                                 .eq("organization_id", org_id)
                                 .eq("user_id", user_id)
@@ -961,8 +962,8 @@ if tab4 is not None:
                                 c
                                 for c in (cards_res.data or [])
                                 if c.get("status", "").lower() == "active"
-                                and c.get("stripe_customer_id")
                                 and c.get("stripe_card_id")
+                                and c.get("stripe_account_id")
                             ]
                         except Exception:
                             cards = []
@@ -972,7 +973,7 @@ if tab4 is not None:
                                 "No active funding cards with Stripe details found. Add a corporate card with stripe_customer_id and stripe_card_id."
                             )
                         else:
-                            with st.form("org_topup_form"):
+                            with st.form("Top Up"):
                                 card_options = {
                                     f"{c.get('card_name') or c['id']}": c["id"]
                                     for c in cards
