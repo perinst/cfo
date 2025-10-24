@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import pandas as pd
 from auth.roles import is_admin, is_manager, is_employee
+import streamlit.components.v1 as components
 
 
 if "auth_user" not in st.session_state or not st.session_state["auth_user"]:
@@ -50,29 +51,26 @@ tab1, tab2, tab3, tab_tx, tab4 = tabs[0], tabs[1], tabs[2], tabs[3], tabs[4]
 
 # Tab 1: Chat Interface
 with tab1:
+    org_id = current_user["organization_id"]
+
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        org_id = current_user["organization_id"]
-        # Chat history
+        # Render chat history (no border/rectangle)
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        # Chat input
-        if prompt := st.chat_input("Ask about finances, budgets, or spending..."):
-            # Add user message
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
-
-            # Get AI response
-            with st.chat_message("assistant"):
-                with st.spinner("Analyzing..."):
-                    response = st.session_state.agent.chat(prompt, org_id)
-                    st.markdown(response)
-
-            st.session_state.messages.append({"role": "assistant", "content": response})
+        # Auto-scroll to latest message
+        components.html(
+            """
+            <script>
+            const root = window.parent.document.querySelector('section.main');
+            if (root) root.scrollTo({top: root.scrollHeight, behavior: 'smooth'});
+            </script>
+            """,
+            height=0,
+        )
 
     with col2:
         st.subheader("💡 Quick Questions")
@@ -87,8 +85,28 @@ with tab1:
 
         for q in questions:
             if st.button(q, key=f"q_{q}"):
+                # Show user bubble and assistant spinner immediately
+
+                with st.chat_message("user"):
+                    st.markdown(q)
+                with st.chat_message("assistant"):
+                    with st.spinner("Analyzing..."):
+                        resp = st.session_state.agent.chat(q, org_id)
+                    st.markdown(resp)
                 st.session_state.messages.append({"role": "user", "content": q})
+                st.session_state.messages.append({"role": "assistant", "content": resp})
                 st.rerun()
+
+    if prompt := st.chat_input("Ask about finances, budgets, or spending..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        with st.chat_message("assistant"):
+            with st.spinner("Analyzing..."):
+                response = st.session_state.agent.chat(prompt, org_id)
+            st.markdown(response)
+        st.session_state.messages.append({"role": "assistant", "content": response})
+        st.rerun()
 
 # Tab 2: Dashboard
 with tab2:
